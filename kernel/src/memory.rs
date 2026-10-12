@@ -7,7 +7,7 @@ use x86_64::structures::paging::{
 use x86_64::{PhysAddr, VirtAddr};
 
 const HEAP_START: u64 = 0x4444_4444_0000;
-pub const HEAP_SIZE: usize = 32 * 1024 * 1024;
+pub const HEAP_SIZE: usize = 128 * 1024 * 1024;
 const FRAME_SIZE: u64 = 4096;
 
 #[global_allocator]

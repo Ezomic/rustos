@@ -1,5 +1,6 @@
 use crate::gdt;
 use crate::keyboard;
+use crate::mouse;
 use crate::println;
 use core::sync::atomic::{AtomicU64, Ordering};
 use pic8259::ChainedPics;
@@ -12,6 +13,7 @@ use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, Pag
 const PIC_OFFSET: u8 = 32;
 const TIMER_VECTOR: u8 = PIC_OFFSET;
 const KEYBOARD_VECTOR: u8 = PIC_OFFSET + 1;
+const MOUSE_VECTOR: u8 = PIC_OFFSET + 12;
 const PIT_FREQUENCY: u32 = 1_193_182;
 pub const TICKS_PER_SECOND: u64 = 100;
 
@@ -30,6 +32,7 @@ static IDT: LazyLock<InterruptDescriptorTable> = LazyLock::new(|| {
     }
     idt[TIMER_VECTOR].set_handler_fn(timer_handler);
     idt[KEYBOARD_VECTOR].set_handler_fn(keyboard_handler);
+    idt[MOUSE_VECTOR].set_handler_fn(mouse_handler);
     idt
 });
 
@@ -38,7 +41,7 @@ pub fn init() {
     unsafe {
         let mut pics = PICS.lock();
         pics.initialize();
-        pics.write_masks(0b1111_1100, 0xff);
+        pics.write_masks(0b1111_1000, 0b1110_1111);
     }
     set_timer_frequency();
 }
@@ -73,6 +76,12 @@ extern "x86-interrupt" fn keyboard_handler(_frame: InterruptStackFrame) {
     end_of_interrupt(KEYBOARD_VECTOR);
 }
 
+extern "x86-interrupt" fn mouse_handler(_frame: InterruptStackFrame) {
+    let byte = unsafe { Port::<u8>::new(0x60).read() };
+    mouse::push_byte(byte);
+    end_of_interrupt(MOUSE_VECTOR);
+}
+
 extern "x86-interrupt" fn breakpoint_handler(frame: InterruptStackFrame) {
     println!("breakpoint at {:#x}", frame.instruction_pointer.as_u64());
 }
@@ -88,11 +97,13 @@ extern "x86-interrupt" fn page_fault_handler(
         address,
         error
     );
+    crate::desktop::emergency_redraw();
     halt()
 }
 
 extern "x86-interrupt" fn double_fault_handler(frame: InterruptStackFrame, _error: u64) -> ! {
     println!("double fault at {:#x}", frame.instruction_pointer.as_u64());
+    crate::desktop::emergency_redraw();
     halt()
 }
 

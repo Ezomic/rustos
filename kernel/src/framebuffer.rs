@@ -1,17 +1,5 @@
+use crate::gfx::{Canvas, Rect};
 use bootloader_api::info::{FrameBufferInfo, PixelFormat};
-
-#[derive(Clone, Copy)]
-pub struct Color {
-    pub r: u8,
-    pub g: u8,
-    pub b: u8,
-}
-
-impl Color {
-    pub const fn new(r: u8, g: u8, b: u8) -> Self {
-        Self { r, g, b }
-    }
-}
 
 pub struct Display {
     buffer: &'static mut [u8],
@@ -23,57 +11,34 @@ impl Display {
         Self { buffer, info }
     }
 
-    pub fn width(&self) -> usize {
-        self.info.width
+    pub fn width(&self) -> i32 {
+        self.info.width as i32
     }
 
-    pub fn height(&self) -> usize {
-        self.info.height
+    pub fn height(&self) -> i32 {
+        self.info.height as i32
     }
 
-    pub fn put_pixel(&mut self, x: usize, y: usize, color: Color) {
-        if x >= self.info.width || y >= self.info.height {
+    pub fn blit(&mut self, canvas: &Canvas, rect: Rect) {
+        let bounds = Rect::new(0, 0, self.width(), self.height());
+        let Some(area) = rect.intersect(&bounds) else {
             return;
-        }
+        };
         let bpp = self.info.bytes_per_pixel;
-        let offset = (y * self.info.stride + x) * bpp;
-        let pixel = &mut self.buffer[offset..offset + bpp];
-        match self.info.pixel_format {
-            PixelFormat::Rgb => {
-                pixel[0] = color.r;
-                pixel[1] = color.g;
-                pixel[2] = color.b;
-            }
-            PixelFormat::Bgr => {
-                pixel[0] = color.b;
-                pixel[1] = color.g;
-                pixel[2] = color.r;
-            }
-            PixelFormat::U8 => {
-                pixel[0] = ((color.r as u16 + color.g as u16 + color.b as u16) / 3) as u8;
-            }
-            _ => {}
-        }
-    }
-
-    pub fn fill_rect(&mut self, x: usize, y: usize, w: usize, h: usize, color: Color) {
-        for row in y..y + h {
-            for col in x..x + w {
-                self.put_pixel(col, row, color);
+        for y in area.y..area.bottom() {
+            let from = (y * canvas.width() + area.x) as usize;
+            let source = &canvas.pixels()[from..from + area.w as usize];
+            let start = (y as usize * self.info.stride + area.x as usize) * bpp;
+            let target = &mut self.buffer[start..start + area.w as usize * bpp];
+            for (pixel, color) in target.chunks_exact_mut(bpp).zip(source) {
+                let (r, g, b) = ((color >> 16) as u8, (color >> 8) as u8, *color as u8);
+                match self.info.pixel_format {
+                    PixelFormat::Rgb => pixel[..3].copy_from_slice(&[r, g, b]),
+                    PixelFormat::Bgr => pixel[..3].copy_from_slice(&[b, g, r]),
+                    PixelFormat::U8 => pixel[0] = ((r as u16 + g as u16 + b as u16) / 3) as u8,
+                    _ => {}
+                }
             }
         }
-    }
-
-    pub fn scroll_up(&mut self, lines: usize, visible_height: usize, background: Color) {
-        let row_bytes = self.info.stride * self.info.bytes_per_pixel;
-        let total = visible_height * row_bytes;
-        self.buffer.copy_within(lines * row_bytes..total, 0);
-        self.fill_rect(
-            0,
-            visible_height - lines,
-            self.info.width,
-            lines,
-            background,
-        );
     }
 }

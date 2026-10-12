@@ -1,29 +1,26 @@
-use crate::framebuffer::{Color, Display};
+use crate::gfx::{rgb, Canvas, Rect};
 use core::fmt::{self, Write};
-use font8x8::legacy::BASIC_LEGACY;
+use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
 
-const GLYPH: usize = 8;
-const SCALE: usize = 2;
-const CELL: usize = GLYPH * SCALE;
-const FOREGROUND: Color = Color::new(0xdd, 0xdd, 0xdd);
-const BACKGROUND: Color = Color::new(0x10, 0x12, 0x1a);
-const CURSOR: Color = Color::new(0x6c, 0xc0, 0xff);
+const SCALE: i32 = 2;
+const CELL: i32 = 8 * SCALE;
+const FOREGROUND: u32 = rgb(0xdd, 0xdd, 0xdd);
+const BACKGROUND: u32 = rgb(0x10, 0x12, 0x1a);
+const CURSOR: u32 = rgb(0x6c, 0xc0, 0xff);
 
 pub struct Console {
-    display: Display,
-    columns: usize,
-    rows: usize,
-    column: usize,
-    row: usize,
+    canvas: Canvas,
+    columns: i32,
+    rows: i32,
+    column: i32,
+    row: i32,
 }
 
 impl Console {
-    pub fn new(display: Display) -> Self {
-        let columns = display.width() / CELL;
-        let rows = display.height() / CELL;
+    pub fn new(columns: i32, rows: i32) -> Self {
         let mut console = Self {
-            display,
+            canvas: Canvas::new(columns * CELL, rows * CELL),
             columns,
             rows,
             column: 0,
@@ -33,20 +30,13 @@ impl Console {
         console
     }
 
-    pub fn columns(&self) -> usize {
-        self.columns
-    }
-
-    pub fn rows(&self) -> usize {
-        self.rows
+    pub fn canvas(&self) -> &Canvas {
+        &self.canvas
     }
 
     pub fn clear(&mut self) {
-        self.display.fill_rect(
-            0,
-            0,
-            self.display.width(),
-            self.display.height(),
+        self.canvas.fill_rect(
+            Rect::new(0, 0, self.canvas.width(), self.canvas.height()),
             BACKGROUND,
         );
         self.column = 0;
@@ -64,34 +54,18 @@ impl Console {
         self.draw_cursor(CURSOR);
     }
 
+    fn cell(&self) -> Rect {
+        Rect::new(self.column * CELL, self.row * CELL, CELL, CELL)
+    }
+
     fn write_glyph(&mut self, ch: char) {
         if self.column == self.columns {
             self.new_line();
         }
-        let index = if ch.is_ascii() {
-            ch as usize
-        } else {
-            b'?' as usize
-        };
-        let glyph = BASIC_LEGACY[index];
-        let origin_x = self.column * CELL;
-        let origin_y = self.row * CELL;
-        for (glyph_y, bits) in glyph.iter().enumerate() {
-            for glyph_x in 0..GLYPH {
-                let color = if bits >> glyph_x & 1 == 1 {
-                    FOREGROUND
-                } else {
-                    BACKGROUND
-                };
-                self.display.fill_rect(
-                    origin_x + glyph_x * SCALE,
-                    origin_y + glyph_y * SCALE,
-                    SCALE,
-                    SCALE,
-                    color,
-                );
-            }
-        }
+        let cell = self.cell();
+        self.canvas.fill_rect(cell, BACKGROUND);
+        self.canvas
+            .draw_glyph(cell.x, cell.y, ch, FOREGROUND, SCALE);
         self.column += 1;
     }
 
@@ -100,8 +74,8 @@ impl Console {
             return;
         }
         self.column -= 1;
-        self.display
-            .fill_rect(self.column * CELL, self.row * CELL, CELL, CELL, BACKGROUND);
+        let cell = self.cell();
+        self.canvas.fill_rect(cell, BACKGROUND);
     }
 
     fn new_line(&mut self) {
@@ -109,21 +83,17 @@ impl Console {
         if self.row + 1 < self.rows {
             self.row += 1;
         } else {
-            self.display.scroll_up(CELL, self.rows * CELL, BACKGROUND);
+            self.canvas.scroll_up(CELL, BACKGROUND);
         }
     }
 
-    fn draw_cursor(&mut self, color: Color) {
+    fn draw_cursor(&mut self, color: u32) {
         if self.column == self.columns {
             return;
         }
-        self.display.fill_rect(
-            self.column * CELL,
-            self.row * CELL + CELL - SCALE * 2,
-            CELL,
-            SCALE * 2,
-            color,
-        );
+        let cell = self.cell();
+        let bar = Rect::new(cell.x, cell.bottom() - SCALE * 2, CELL, SCALE * 2);
+        self.canvas.fill_rect(bar, color);
     }
 }
 
@@ -135,22 +105,38 @@ impl fmt::Write for Console {
 }
 
 static CONSOLE: Mutex<Option<Console>> = Mutex::new(None);
+static DIRTY: AtomicBool = AtomicBool::new(false);
 
 pub fn install(console: Console) {
     *CONSOLE.lock() = Some(console);
 }
 
 pub fn with_console<R>(f: impl FnOnce(&mut Console) -> R) -> Option<R> {
-    CONSOLE.lock().as_mut().map(f)
+    let result = CONSOLE.lock().as_mut().map(f);
+    DIRTY.store(true, Ordering::Release);
+    result
 }
 
-pub fn print(args: fmt::Arguments) {
+pub fn peek<R>(f: impl FnOnce(&Console) -> R) -> Option<R> {
+    CONSOLE.lock().as_ref().map(f)
+}
+
+pub fn take_dirty() -> bool {
+    DIRTY.swap(false, Ordering::AcqRel)
+}
+
+pub fn force_unlock() {
     if CONSOLE.is_locked() {
         unsafe { CONSOLE.force_unlock() };
     }
+}
+
+pub fn print(args: fmt::Arguments) {
+    force_unlock();
     if let Some(console) = CONSOLE.lock().as_mut() {
         let _ = console.write_fmt(args);
     }
+    DIRTY.store(true, Ordering::Release);
 }
 
 #[macro_export]
