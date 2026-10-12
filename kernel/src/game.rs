@@ -104,6 +104,7 @@ impl Breakout {
             last_step: now,
             launches: 0,
         };
+        game.rest_ball();
         game.render();
         game
     }
@@ -142,6 +143,11 @@ impl Breakout {
         }
     }
 
+    fn rest_ball(&mut self) {
+        self.ball_x = (self.paddle_x + (PADDLE_WIDTH - BALL_SIZE) / 2) * FIXED;
+        self.ball_y = (PADDLE_Y - BALL_SIZE) * FIXED;
+    }
+
     fn reset(&mut self) {
         self.bricks = [[true; COLUMNS]; ROWS];
         self.score = 0;
@@ -155,8 +161,7 @@ impl Breakout {
         let action = core::mem::take(&mut self.action);
         match self.phase {
             Phase::Waiting => {
-                self.ball_x = (self.paddle_x + (PADDLE_WIDTH - BALL_SIZE) / 2) * FIXED;
-                self.ball_y = (PADDLE_Y - BALL_SIZE) * FIXED;
+                self.rest_ball();
                 if action {
                     self.launches += 1;
                     let side = if self.launches % 2 == 0 { 1 } else { -1 };

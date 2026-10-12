@@ -1,3 +1,4 @@
+use core::sync::atomic::{AtomicU64, Ordering};
 use crossbeam_queue::ArrayQueue;
 use pc_keyboard::{
     layouts::Us104Key, DecodedKey, HandleControl, KeyCode, KeyState, PS2Keyboard, ScancodeSet1,
@@ -7,12 +8,18 @@ use spin::Once;
 const QUEUE_CAPACITY: usize = 128;
 
 static SCANCODES: Once<ArrayQueue<u8>> = Once::new();
+static SEEN: AtomicU64 = AtomicU64::new(0);
 
 pub fn init_queue() {
     SCANCODES.call_once(|| ArrayQueue::new(QUEUE_CAPACITY));
 }
 
+pub fn scancodes_seen() -> u64 {
+    SEEN.load(Ordering::Relaxed)
+}
+
 pub fn push_scancode(scancode: u8) {
+    SEEN.fetch_add(1, Ordering::Relaxed);
     if let Some(queue) = SCANCODES.get() {
         let _ = queue.push(scancode);
     }

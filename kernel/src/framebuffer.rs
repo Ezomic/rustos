@@ -1,4 +1,6 @@
 use crate::gfx::{Canvas, Rect};
+use alloc::format;
+use alloc::string::String;
 use bootloader_api::info::{FrameBufferInfo, PixelFormat};
 
 pub struct Display {
@@ -19,6 +21,17 @@ impl Display {
         self.info.height as i32
     }
 
+    pub fn summary(&self) -> String {
+        format!(
+            "{}x{} stride {} {} bytes/pixel {:?}",
+            self.info.width,
+            self.info.height,
+            self.info.stride,
+            self.info.bytes_per_pixel,
+            self.info.pixel_format
+        )
+    }
+
     pub fn blit(&mut self, canvas: &Canvas, rect: Rect) {
         let bounds = Rect::new(0, 0, self.width(), self.height());
         let Some(area) = rect.intersect(&bounds) else {
@@ -30,14 +43,33 @@ impl Display {
             let source = &canvas.pixels()[from..from + area.w as usize];
             let start = (y as usize * self.info.stride + area.x as usize) * bpp;
             let target = &mut self.buffer[start..start + area.w as usize * bpp];
-            for (pixel, color) in target.chunks_exact_mut(bpp).zip(source) {
-                let (r, g, b) = ((color >> 16) as u8, (color >> 8) as u8, *color as u8);
-                match self.info.pixel_format {
-                    PixelFormat::Rgb => pixel[..3].copy_from_slice(&[r, g, b]),
-                    PixelFormat::Bgr => pixel[..3].copy_from_slice(&[b, g, r]),
-                    PixelFormat::U8 => pixel[0] = ((r as u16 + g as u16 + b as u16) / 3) as u8,
-                    _ => {}
+            let pixels = target.chunks_exact_mut(bpp).zip(source);
+            match self.info.pixel_format {
+                PixelFormat::Rgb => {
+                    for (pixel, color) in pixels {
+                        pixel[..3].copy_from_slice(&[
+                            (color >> 16) as u8,
+                            (color >> 8) as u8,
+                            *color as u8,
+                        ]);
+                    }
                 }
+                PixelFormat::Bgr => {
+                    for (pixel, color) in pixels {
+                        pixel[..3].copy_from_slice(&[
+                            *color as u8,
+                            (color >> 8) as u8,
+                            (color >> 16) as u8,
+                        ]);
+                    }
+                }
+                PixelFormat::U8 => {
+                    for (pixel, color) in pixels {
+                        let sum = (color >> 16 & 0xff) + (color >> 8 & 0xff) + (color & 0xff);
+                        pixel[0] = (sum / 3) as u8;
+                    }
+                }
+                _ => {}
             }
         }
     }

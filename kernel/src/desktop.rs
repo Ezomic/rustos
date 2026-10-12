@@ -397,6 +397,10 @@ fn with<R>(f: impl FnOnce(&mut Desktop) -> R) -> Option<R> {
     DESKTOP_STATE.lock().as_mut().map(f)
 }
 
+pub fn display_summary() -> String {
+    with(|d| d.display.summary()).unwrap_or_default()
+}
+
 pub fn screen_size() -> (i32, i32) {
     with(|d| (d.display.width(), d.display.height())).unwrap_or((0, 0))
 }

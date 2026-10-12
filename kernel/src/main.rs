@@ -6,6 +6,7 @@ extern crate alloc;
 
 mod console;
 mod desktop;
+mod diagnostics;
 mod framebuffer;
 mod game;
 mod gdt;
