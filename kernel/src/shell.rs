@@ -42,7 +42,7 @@ fn run_command(command: &str) {
     let (name, argument) = command.split_once(' ').unwrap_or((command, ""));
     match name {
         "" => {}
-        "help" => println!("help  clear  echo <text>  info  uptime  mem  int3  fault"),
+        "help" => println!("help  clear  echo <text>  info  diag  uptime  mem  int3  fault"),
         "clear" => {
             crate::console::with_console(|c| c.clear());
         }
@@ -56,6 +56,7 @@ fn run_command(command: &str) {
             let per_second = crate::interrupts::TICKS_PER_SECOND;
             println!("{}.{:02} s", ticks / per_second, ticks % per_second);
         }
+        "diag" => crate::diagnostics::print(),
         "mem" => println!(
             "heap used {} of {} KiB",
             crate::memory::heap_used() >> 10,

@@ -1,3 +1,4 @@
+use core::sync::atomic::{AtomicU64, Ordering};
 use crossbeam_queue::ArrayQueue;
 use spin::Once;
 use x86_64::instructions::port::Port;
@@ -7,6 +8,7 @@ const SPIN_LIMIT: u32 = 200_000;
 const ACK: u8 = 0xfa;
 
 static BYTES: Once<ArrayQueue<u8>> = Once::new();
+static SEEN: AtomicU64 = AtomicU64::new(0);
 
 pub struct MouseEvent {
     pub dx: i32,
@@ -73,7 +75,12 @@ unsafe fn wait_output_full(command: &mut Port<u8>) -> bool {
     (0..SPIN_LIMIT).any(|_| command.read() & 1 != 0)
 }
 
+pub fn bytes_seen() -> u64 {
+    SEEN.load(Ordering::Relaxed)
+}
+
 pub fn push_byte(byte: u8) {
+    SEEN.fetch_add(1, Ordering::Relaxed);
     if let Some(queue) = BYTES.get() {
         let _ = queue.push(byte);
     }
