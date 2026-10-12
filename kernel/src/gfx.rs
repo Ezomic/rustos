@@ -169,12 +169,6 @@ impl Canvas {
         }
     }
 
-    pub fn put_pixel(&mut self, x: i32, y: i32, color: u32) {
-        if self.clip.contains(x, y) {
-            self.pixels[(y * self.width + x) as usize] = color;
-        }
-    }
-
     pub fn blit(&mut self, source: &Canvas, x: i32, y: i32) {
         let target = Rect::new(x, y, source.width, source.height);
         let Some(area) = target.intersect(&self.clip) else {
@@ -185,6 +179,21 @@ impl Canvas {
             let to = (row * self.width + area.x) as usize;
             self.pixels[to..to + area.w as usize]
                 .copy_from_slice(&source.pixels[from..from + area.w as usize]);
+        }
+    }
+
+    pub fn blit_scaled(&mut self, source: &Canvas, x: i32, y: i32, factor: i32) {
+        let target = Rect::new(x, y, source.width * factor, source.height * factor);
+        let Some(area) = target.intersect(&self.clip) else {
+            return;
+        };
+        for row in area.y..area.bottom() {
+            let source_row = ((row - y) / factor * source.width) as usize;
+            let to = (row * self.width) as usize;
+            for column in area.x..area.right() {
+                let source_column = ((column - x) / factor) as usize;
+                self.pixels[to + column as usize] = source.pixels[source_row + source_column];
+            }
         }
     }
 

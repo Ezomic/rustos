@@ -3,14 +3,14 @@ use core::fmt::{self, Write};
 use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
 
-const SCALE: i32 = 2;
-const CELL: i32 = 8 * SCALE;
 const FOREGROUND: u32 = rgb(0xdd, 0xdd, 0xdd);
 const BACKGROUND: u32 = rgb(0x10, 0x12, 0x1a);
 const CURSOR: u32 = rgb(0x6c, 0xc0, 0xff);
 
 pub struct Console {
     canvas: Canvas,
+    scale: i32,
+    cell: i32,
     columns: i32,
     rows: i32,
     column: i32,
@@ -18,9 +18,12 @@ pub struct Console {
 }
 
 impl Console {
-    pub fn new(columns: i32, rows: i32) -> Self {
+    pub fn new(columns: i32, rows: i32, scale: i32) -> Self {
+        let cell = 8 * scale;
         let mut console = Self {
-            canvas: Canvas::new(columns * CELL, rows * CELL),
+            canvas: Canvas::new(columns * cell, rows * cell),
+            scale,
+            cell,
             columns,
             rows,
             column: 0,
@@ -55,7 +58,12 @@ impl Console {
     }
 
     fn cell(&self) -> Rect {
-        Rect::new(self.column * CELL, self.row * CELL, CELL, CELL)
+        Rect::new(
+            self.column * self.cell,
+            self.row * self.cell,
+            self.cell,
+            self.cell,
+        )
     }
 
     fn write_glyph(&mut self, ch: char) {
@@ -65,7 +73,7 @@ impl Console {
         let cell = self.cell();
         self.canvas.fill_rect(cell, BACKGROUND);
         self.canvas
-            .draw_glyph(cell.x, cell.y, ch, FOREGROUND, SCALE);
+            .draw_glyph(cell.x, cell.y, ch, FOREGROUND, self.scale);
         self.column += 1;
     }
 
@@ -83,7 +91,7 @@ impl Console {
         if self.row + 1 < self.rows {
             self.row += 1;
         } else {
-            self.canvas.scroll_up(CELL, BACKGROUND);
+            self.canvas.scroll_up(self.cell, BACKGROUND);
         }
     }
 
@@ -92,7 +100,12 @@ impl Console {
             return;
         }
         let cell = self.cell();
-        let bar = Rect::new(cell.x, cell.bottom() - SCALE * 2, CELL, SCALE * 2);
+        let bar = Rect::new(
+            cell.x,
+            cell.bottom() - self.scale * 2,
+            self.cell,
+            self.scale * 2,
+        );
         self.canvas.fill_rect(bar, color);
     }
 }

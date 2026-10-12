@@ -9,12 +9,6 @@ use alloc::vec::Vec;
 use core::fmt::Write;
 use spin::Mutex;
 
-const TITLE_HEIGHT: i32 = 22;
-const TASKBAR_HEIGHT: i32 = 30;
-const BUTTON_WIDTH: i32 = 120;
-const BUTTON_HEIGHT: i32 = 22;
-const CLOCK_WIDTH: i32 = 48;
-
 const DESKTOP: u32 = rgb(0x1d, 0x3b, 0x4a);
 const TASKBAR: u32 = rgb(0x15, 0x18, 0x20);
 const BUTTON: u32 = rgb(0x2a, 0x30, 0x3c);
@@ -48,6 +42,35 @@ const CURSOR_SPRITE: [&str; 17] = [
 ];
 const CURSOR_SIZE: (i32, i32) = (11, 17);
 
+#[derive(Clone, Copy)]
+struct Metrics {
+    scale: i32,
+    title: i32,
+    border: i32,
+    taskbar: i32,
+    button_width: i32,
+    button_height: i32,
+    clock_width: i32,
+    margin: i32,
+    gap: i32,
+}
+
+impl Metrics {
+    fn new(scale: i32) -> Self {
+        Self {
+            scale,
+            title: 22 * scale,
+            border: scale,
+            taskbar: 30 * scale,
+            button_width: 120 * scale,
+            button_height: 22 * scale,
+            clock_width: 48 * scale,
+            margin: 20 * scale,
+            gap: 4 * scale,
+        }
+    }
+}
+
 enum Content {
     Terminal,
     Game,
@@ -69,16 +92,16 @@ struct Window {
 }
 
 impl Window {
-    fn title_bar(&self) -> Rect {
-        Rect::new(self.rect.x, self.rect.y, self.rect.w, TITLE_HEIGHT)
+    fn title_bar(&self, m: &Metrics) -> Rect {
+        Rect::new(self.rect.x, self.rect.y, self.rect.w, m.title)
     }
 
-    fn content_area(&self) -> Rect {
+    fn content_area(&self, m: &Metrics) -> Rect {
         Rect::new(
-            self.rect.x + 1,
-            self.rect.y + TITLE_HEIGHT,
-            self.rect.w - 2,
-            self.rect.h - TITLE_HEIGHT - 1,
+            self.rect.x + m.border,
+            self.rect.y + m.title,
+            self.rect.w - 2 * m.border,
+            self.rect.h - m.title - m.border,
         )
     }
 }
@@ -86,6 +109,7 @@ impl Window {
 pub struct Desktop {
     display: Display,
     canvas: Canvas,
+    metrics: Metrics,
     windows: Vec<Window>,
     cursor: (i32, i32),
     left_down: bool,
@@ -97,35 +121,29 @@ pub struct Desktop {
 impl Desktop {
     pub fn new(
         display: Display,
+        scale: i32,
         terminal_size: (i32, i32),
         game_size: (i32, i32),
         about: Vec<String>,
     ) -> Self {
+        let m = Metrics::new(scale);
         let canvas = Canvas::new(display.width(), display.height());
-        let about_width = 280;
-        let about_height = TITLE_HEIGHT + 1 + 16 + about.len() as i32 * 16;
-        let margin = 20;
+        let framed = |width: i32, height: i32| (width + 2 * m.border, height + m.title + m.border);
+        let (terminal_width, terminal_height) = framed(terminal_size.0, terminal_size.1);
+        let (game_width, game_height) = framed(game_size.0 * scale, game_size.1 * scale);
+        let about_width = 280 * scale;
+        let about_height = m.title + m.border + 16 * scale * (about.len() as i32 + 1);
         let terminal = Window {
             id: 0,
             title: "Terminal",
-            rect: Rect::new(
-                margin,
-                margin,
-                terminal_size.0 + 2,
-                terminal_size.1 + TITLE_HEIGHT + 1,
-            ),
+            rect: Rect::new(m.margin, m.margin, terminal_width, terminal_height),
             content: Content::Terminal,
         };
-        let column = terminal.rect.right() + margin;
+        let column = terminal.rect.right() + m.margin;
         let breakout = Window {
             id: 2,
             title: "Breakout",
-            rect: Rect::new(
-                column,
-                margin,
-                game_size.0 + 2,
-                game_size.1 + TITLE_HEIGHT + 1,
-            ),
+            rect: Rect::new(column, m.margin, game_width, game_height),
             content: Content::Game,
         };
         let about = Window {
@@ -133,7 +151,7 @@ impl Desktop {
             title: "About",
             rect: Rect::new(
                 column,
-                breakout.rect.bottom() + margin,
+                breakout.rect.bottom() + m.margin,
                 about_width,
                 about_height,
             ),
@@ -143,6 +161,7 @@ impl Desktop {
             cursor: (display.width() / 2, display.height() / 2),
             display,
             canvas,
+            metrics: m,
             windows: alloc::vec![about, breakout, terminal],
             left_down: false,
             grab: None,
@@ -158,36 +177,45 @@ impl Desktop {
     }
 
     fn taskbar_area(&self) -> Rect {
+        let height = self.metrics.taskbar;
         Rect::new(
             0,
-            self.display.height() - TASKBAR_HEIGHT,
+            self.display.height() - height,
             self.display.width(),
-            TASKBAR_HEIGHT,
+            height,
         )
     }
 
     fn clock_area(&self) -> Rect {
+        let m = &self.metrics;
         let bar = self.taskbar_area();
         Rect::new(
-            bar.right() - CLOCK_WIDTH - 8,
-            bar.y + 4,
-            CLOCK_WIDTH + 8,
-            22,
+            bar.right() - m.clock_width - 2 * m.gap,
+            bar.y + m.gap,
+            m.clock_width + 2 * m.gap,
+            m.button_height,
         )
     }
 
     fn button_area(&self, index: usize) -> Rect {
+        let m = &self.metrics;
         let bar = self.taskbar_area();
         Rect::new(
-            4 + index as i32 * (BUTTON_WIDTH + 4),
-            bar.y + 4,
-            BUTTON_WIDTH,
-            BUTTON_HEIGHT,
+            m.gap + index as i32 * (m.button_width + m.gap),
+            bar.y + m.gap,
+            m.button_width,
+            m.button_height,
         )
     }
 
     fn cursor_area(&self) -> Rect {
-        Rect::new(self.cursor.0, self.cursor.1, CURSOR_SIZE.0, CURSOR_SIZE.1)
+        let scale = self.metrics.scale;
+        Rect::new(
+            self.cursor.0,
+            self.cursor.1,
+            CURSOR_SIZE.0 * scale,
+            CURSOR_SIZE.1 * scale,
+        )
     }
 
     fn damage_rect(&mut self, rect: Rect) {
@@ -222,7 +250,7 @@ impl Desktop {
         };
         self.raise(index);
         let window = self.windows.last().expect("window just raised");
-        if window.title_bar().contains(x, y) {
+        if window.title_bar(&self.metrics).contains(x, y) {
             self.grab = Some((x - window.rect.x, y - window.rect.y));
         }
     }
@@ -231,11 +259,12 @@ impl Desktop {
         let Some((grab_x, grab_y)) = self.grab else {
             return;
         };
-        let limit_y = self.taskbar_area().y - TITLE_HEIGHT;
-        let max_x = self.display.width() - 40;
+        let keep_visible = 40 * self.metrics.scale;
+        let limit_y = self.taskbar_area().y - self.metrics.title;
+        let max_x = self.display.width() - keep_visible;
         let window = self.windows.last_mut().expect("dragging requires a window");
         let old = window.rect;
-        window.rect.x = (x - grab_x).clamp(40 - window.rect.w, max_x);
+        window.rect.x = (x - grab_x).clamp(keep_visible - window.rect.w, max_x);
         window.rect.y = (y - grab_y).clamp(0, limit_y);
         let new = window.rect;
         if new != old {
@@ -247,8 +276,9 @@ impl Desktop {
         let old_cursor = self.cursor_area();
         let width = self.display.width();
         let height = self.display.height();
-        self.cursor.0 = (self.cursor.0 + event.dx).clamp(0, width - 1);
-        self.cursor.1 = (self.cursor.1 + event.dy).clamp(0, height - 1);
+        let speed = self.metrics.scale;
+        self.cursor.0 = (self.cursor.0 + event.dx * speed).clamp(0, width - 1);
+        self.cursor.1 = (self.cursor.1 + event.dy * speed).clamp(0, height - 1);
         let (x, y) = self.cursor;
         if event.left && !self.left_down {
             self.press(x, y);
@@ -283,7 +313,7 @@ impl Desktop {
             .windows
             .iter()
             .find(|w| matches(&w.content))
-            .map(|w| w.content_area());
+            .map(|w| w.content_area(&self.metrics));
         if let Some(area) = area {
             self.damage_rect(area);
         }
@@ -312,13 +342,14 @@ impl Desktop {
         self.canvas.fill_rect(screen, DESKTOP);
         let last = self.windows.len().saturating_sub(1);
         for (index, window) in self.windows.iter().enumerate() {
-            draw_window(&mut self.canvas, window, index == last);
+            draw_window(&mut self.canvas, window, index == last, &self.metrics);
         }
         self.draw_taskbar();
         self.draw_cursor();
     }
 
     fn draw_taskbar(&mut self) {
+        let scale = self.metrics.scale;
         let bar = self.taskbar_area();
         self.canvas.fill_rect(bar, TASKBAR);
         let last = self.windows.len().saturating_sub(1);
@@ -326,8 +357,13 @@ impl Desktop {
             let area = self.button_area(window.id);
             let color = if index == last { BUTTON_ACTIVE } else { BUTTON };
             self.canvas.fill_rect(area, color);
-            self.canvas
-                .draw_text(area.x + 8, area.y + 7, window.title, TEXT, 1);
+            self.canvas.draw_text(
+                area.x + 8 * scale,
+                area.y + 7 * scale,
+                window.title,
+                TEXT,
+                scale,
+            );
         }
         let mut clock = String::new();
         let _ = write!(
@@ -338,10 +374,11 @@ impl Desktop {
         );
         let area = self.clock_area();
         self.canvas
-            .draw_text(area.x + 4, area.y + 7, &clock, TEXT, 1);
+            .draw_text(area.x + 4 * scale, area.y + 7 * scale, &clock, TEXT, scale);
     }
 
     fn draw_cursor(&mut self) {
+        let scale = self.metrics.scale;
         let (cursor_x, cursor_y) = self.cursor;
         for (row, line) in CURSOR_SPRITE.iter().enumerate() {
             for (column, cell) in line.chars().enumerate() {
@@ -350,38 +387,55 @@ impl Desktop {
                     '.' => WHITE,
                     _ => continue,
                 };
-                self.canvas
-                    .put_pixel(cursor_x + column as i32, cursor_y + row as i32, color);
+                let pixel = Rect::new(
+                    cursor_x + column as i32 * scale,
+                    cursor_y + row as i32 * scale,
+                    scale,
+                    scale,
+                );
+                self.canvas.fill_rect(pixel, color);
             }
         }
     }
 }
 
-fn draw_window(canvas: &mut Canvas, window: &Window, focused: bool) {
+fn draw_window(canvas: &mut Canvas, window: &Window, focused: bool, m: &Metrics) {
     canvas.fill_rect(window.rect, BORDER);
     let title_color = if focused {
         TITLE_ACTIVE
     } else {
         TITLE_INACTIVE
     };
-    let bar = window.title_bar();
+    let bar = window.title_bar(m);
     canvas.fill_rect(
-        Rect::new(bar.x + 1, bar.y + 1, bar.w - 2, bar.h - 1),
+        Rect::new(
+            bar.x + m.border,
+            bar.y + m.border,
+            bar.w - 2 * m.border,
+            bar.h - m.border,
+        ),
         title_color,
     );
-    canvas.draw_text(bar.x + 8, bar.y + 7, window.title, TEXT, 1);
-    let area = window.content_area();
+    canvas.draw_text(
+        bar.x + 8 * m.scale,
+        bar.y + 7 * m.scale,
+        window.title,
+        TEXT,
+        m.scale,
+    );
+    let area = window.content_area(m);
     canvas.fill_rect(area, PANEL);
     match &window.content {
         Content::Terminal => {
             console::peek(|c| canvas.blit(c.canvas(), area.x, area.y));
         }
         Content::Game => {
-            game::peek(|g| canvas.blit(g.canvas(), area.x, area.y));
+            game::peek(|g| canvas.blit_scaled(g.canvas(), area.x, area.y, m.scale));
         }
         Content::Text(lines) => {
             for (index, line) in lines.iter().enumerate() {
-                canvas.draw_text(area.x + 12, area.y + 12 + index as i32 * 16, line, TEXT, 1);
+                let y = area.y + (12 + index as i32 * 16) * m.scale;
+                canvas.draw_text(area.x + 12 * m.scale, y, line, TEXT, m.scale);
             }
         }
     }
@@ -403,6 +457,10 @@ pub fn display_summary() -> String {
 
 pub fn screen_size() -> (i32, i32) {
     with(|d| (d.display.width(), d.display.height())).unwrap_or((0, 0))
+}
+
+pub fn ui_scale() -> i32 {
+    with(|d| d.metrics.scale).unwrap_or(1)
 }
 
 pub fn focus() -> Focus {
