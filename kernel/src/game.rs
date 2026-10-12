@@ -153,6 +153,7 @@ impl Breakout {
         self.score = 0;
         self.lives = STARTING_LIVES;
         self.phase = Phase::Waiting;
+        self.rest_ball();
     }
 
     fn step(&mut self) {
@@ -323,6 +324,13 @@ pub fn pause(now: u64) {
 pub fn update(now: u64) {
     if let Some(game) = GAME.lock().as_mut() {
         game.update(now);
+    }
+}
+
+pub fn restart() {
+    if let Some(game) = GAME.lock().as_mut() {
+        game.reset();
+        game.render();
     }
 }
 

@@ -16,6 +16,7 @@ mod keyboard;
 mod memory;
 mod mouse;
 mod shell;
+mod widgets;
 
 use alloc::format;
 use alloc::vec;
