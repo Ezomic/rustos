@@ -1,6 +1,7 @@
 use crate::framebuffer::{Color, Display};
-use core::fmt;
+use core::fmt::{self, Write};
 use font8x8::legacy::BASIC_LEGACY;
+use spin::Mutex;
 
 const GLYPH: usize = 8;
 const SCALE: usize = 2;
@@ -131,4 +132,34 @@ impl fmt::Write for Console {
         s.chars().for_each(|ch| self.put_char(ch));
         Ok(())
     }
+}
+
+static CONSOLE: Mutex<Option<Console>> = Mutex::new(None);
+
+pub fn install(console: Console) {
+    *CONSOLE.lock() = Some(console);
+}
+
+pub fn with_console<R>(f: impl FnOnce(&mut Console) -> R) -> Option<R> {
+    CONSOLE.lock().as_mut().map(f)
+}
+
+pub fn print(args: fmt::Arguments) {
+    if CONSOLE.is_locked() {
+        unsafe { CONSOLE.force_unlock() };
+    }
+    if let Some(console) = CONSOLE.lock().as_mut() {
+        let _ = console.write_fmt(args);
+    }
+}
+
+#[macro_export]
+macro_rules! print {
+    ($($arg:tt)*) => ($crate::console::print(format_args!($($arg)*)));
+}
+
+#[macro_export]
+macro_rules! println {
+    () => ($crate::print!("\n"));
+    ($($arg:tt)*) => ($crate::print!("{}\n", format_args!($($arg)*)));
 }

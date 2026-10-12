@@ -1,103 +1,135 @@
 #![no_std]
 #![no_main]
+#![feature(abi_x86_interrupt)]
+
+extern crate alloc;
 
 mod console;
 mod framebuffer;
+mod gdt;
+mod interrupts;
 mod keyboard;
+mod memory;
 
-use bootloader_api::{entry_point, BootInfo};
+use alloc::vec::Vec;
+use bootloader_api::config::Mapping;
+use bootloader_api::{entry_point, BootInfo, BootloaderConfig};
 use console::Console;
-use core::fmt::Write;
 use core::panic::PanicInfo;
 use framebuffer::Display;
 use keyboard::Keyboard;
+use x86_64::instructions::interrupts as cpu;
 
 const PROMPT: &str = "> ";
 const LINE_CAPACITY: usize = 256;
 
-entry_point!(kernel_main);
+pub static BOOTLOADER_CONFIG: BootloaderConfig = {
+    let mut config = BootloaderConfig::new_default();
+    config.mappings.physical_memory = Some(Mapping::Dynamic);
+    config
+};
+
+entry_point!(kernel_main, config = &BOOTLOADER_CONFIG);
 
 fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     let Some(framebuffer) = boot_info.framebuffer.as_mut() else {
-        halt()
+        interrupts::halt()
     };
     let info = framebuffer.info();
-    let display = Display::new(framebuffer.buffer_mut(), info);
-    let mut console = Console::new(display);
-    let mut keyboard = Keyboard::new();
+    console::install(Console::new(Display::new(framebuffer.buffer_mut(), info)));
+    let (columns, rows) = console::with_console(|c| (c.columns(), c.rows())).unwrap_or((0, 0));
+    println!("rustos console, {columns}x{rows} cells");
 
-    let _ = writeln!(
-        console,
-        "rustos console, {}x{} cells",
-        console.columns(),
-        console.rows()
+    gdt::init();
+    interrupts::init();
+    let offset = boot_info
+        .physical_memory_offset
+        .into_option()
+        .expect("physical memory is not mapped");
+    memory::init_heap(offset, &boot_info.memory_regions);
+    keyboard::init_queue();
+    cpu::enable();
+    println!(
+        "heap {} MiB, timer {} Hz",
+        memory::HEAP_SIZE >> 20,
+        interrupts::TICKS_PER_SECOND
     );
-    let _ = writeln!(console, "type help for commands");
-    let _ = write!(console, "{PROMPT}");
+    println!("type help for commands");
 
-    let mut line = [0u8; LINE_CAPACITY];
-    let mut length = 0;
+    shell()
+}
+
+fn shell() -> ! {
+    let mut keyboard = Keyboard::new();
+    let mut line = Vec::with_capacity(LINE_CAPACITY);
+    print!("{PROMPT}");
     loop {
-        let Some(ch) = keyboard.poll() else {
-            core::hint::spin_loop();
+        let Some(ch) = next_char(&mut keyboard) else {
             continue;
         };
         match ch {
             '\n' | '\r' => {
-                console.put_char('\n');
-                let command = core::str::from_utf8(&line[..length]).unwrap_or("");
-                run_command(&mut console, command);
-                length = 0;
-                let _ = write!(console, "{PROMPT}");
+                println!();
+                run_command(core::str::from_utf8(&line).unwrap_or(""));
+                line.clear();
+                print!("{PROMPT}");
             }
             '\u{8}' | '\u{7f}' => {
-                if length > 0 {
-                    length -= 1;
-                    console.put_char('\u{8}');
+                if line.pop().is_some() {
+                    print!("\u{8}");
                 }
             }
-            ' '..='~' if length < LINE_CAPACITY => {
-                line[length] = ch as u8;
-                length += 1;
-                console.put_char(ch);
+            ' '..='~' if line.len() < LINE_CAPACITY => {
+                line.push(ch as u8);
+                print!("{ch}");
             }
             _ => {}
         }
     }
 }
 
-fn run_command(console: &mut Console, command: &str) {
+fn next_char(keyboard: &mut Keyboard) -> Option<char> {
+    cpu::disable();
+    if !keyboard::has_input() {
+        cpu::enable_and_hlt();
+    } else {
+        cpu::enable();
+    }
+    keyboard.next_char()
+}
+
+fn run_command(command: &str) {
     let (name, argument) = command.split_once(' ').unwrap_or((command, ""));
     match name {
         "" => {}
-        "help" => {
-            let _ = writeln!(console, "help  clear  echo <text>  info");
+        "help" => println!("help  clear  echo <text>  info  uptime  mem  int3  fault"),
+        "clear" => {
+            console::with_console(|c| c.clear());
         }
-        "clear" => console.clear(),
-        "echo" => {
-            let _ = writeln!(console, "{argument}");
-        }
+        "echo" => println!("{argument}"),
         "info" => {
-            let _ = writeln!(
-                console,
-                "console {}x{} cells",
-                console.columns(),
-                console.rows()
-            );
+            let (columns, rows) =
+                console::with_console(|c| (c.columns(), c.rows())).unwrap_or((0, 0));
+            println!("console {columns}x{rows} cells");
         }
-        _ => {
-            let _ = writeln!(console, "unknown command: {name}");
+        "uptime" => {
+            let ticks = interrupts::ticks();
+            let per_second = interrupts::TICKS_PER_SECOND;
+            println!("{}.{:02} s", ticks / per_second, ticks % per_second);
         }
+        "mem" => println!(
+            "heap used {} of {} KiB",
+            memory::heap_used() >> 10,
+            memory::HEAP_SIZE >> 10
+        ),
+        "int3" => x86_64::instructions::interrupts::int3(),
+        "fault" => unsafe { (0xdead_0000 as *mut u8).write_volatile(0) },
+        _ => println!("unknown command: {name}"),
     }
 }
 
 #[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    halt()
-}
-
-fn halt() -> ! {
-    loop {
-        core::hint::spin_loop();
-    }
+fn panic(info: &PanicInfo) -> ! {
+    println!("panic: {info}");
+    interrupts::halt()
 }
