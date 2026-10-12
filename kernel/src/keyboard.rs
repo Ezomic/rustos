@@ -1,10 +1,24 @@
-use core::arch::asm;
+use crossbeam_queue::ArrayQueue;
 use pc_keyboard::{layouts::Us104Key, DecodedKey, HandleControl, PS2Keyboard, ScancodeSet1};
+use spin::Once;
 
-const DATA_PORT: u16 = 0x60;
-const STATUS_PORT: u16 = 0x64;
-const OUTPUT_FULL: u8 = 1;
-const FROM_MOUSE: u8 = 1 << 5;
+const QUEUE_CAPACITY: usize = 128;
+
+static SCANCODES: Once<ArrayQueue<u8>> = Once::new();
+
+pub fn init_queue() {
+    SCANCODES.call_once(|| ArrayQueue::new(QUEUE_CAPACITY));
+}
+
+pub fn push_scancode(scancode: u8) {
+    if let Some(queue) = SCANCODES.get() {
+        let _ = queue.push(scancode);
+    }
+}
+
+pub fn has_input() -> bool {
+    SCANCODES.get().is_some_and(|queue| !queue.is_empty())
+}
 
 pub struct Keyboard {
     decoder: PS2Keyboard<Us104Key, ScancodeSet1>,
@@ -17,25 +31,16 @@ impl Keyboard {
         }
     }
 
-    pub fn poll(&mut self) -> Option<char> {
-        let status = unsafe { port_in(STATUS_PORT) };
-        if status & OUTPUT_FULL == 0 {
-            return None;
+    pub fn next_char(&mut self) -> Option<char> {
+        let queue = SCANCODES.get()?;
+        while let Some(byte) = queue.pop() {
+            let Ok(Some(event)) = self.decoder.add_byte(byte) else {
+                continue;
+            };
+            if let Some(DecodedKey::Unicode(ch)) = self.decoder.process_keyevent(event) {
+                return Some(ch);
+            }
         }
-        let byte = unsafe { port_in(DATA_PORT) };
-        if status & FROM_MOUSE != 0 {
-            return None;
-        }
-        let event = self.decoder.add_byte(byte).ok()??;
-        match self.decoder.process_keyevent(event)? {
-            DecodedKey::Unicode(ch) => Some(ch),
-            DecodedKey::RawKey(_) => None,
-        }
+        None
     }
-}
-
-unsafe fn port_in(port: u16) -> u8 {
-    let value: u8;
-    asm!("in al, dx", out("al") value, in("dx") port, options(nomem, nostack, preserves_flags));
-    value
 }
