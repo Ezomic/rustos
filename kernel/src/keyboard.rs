@@ -16,10 +16,6 @@ pub fn push_scancode(scancode: u8) {
     }
 }
 
-pub fn has_input() -> bool {
-    SCANCODES.get().is_some_and(|queue| !queue.is_empty())
-}
-
 pub struct Keyboard {
     decoder: PS2Keyboard<Us104Key, ScancodeSet1>,
 }

@@ -5,23 +5,30 @@
 extern crate alloc;
 
 mod console;
+mod desktop;
 mod framebuffer;
 mod gdt;
+mod gfx;
 mod interrupts;
 mod keyboard;
 mod memory;
+mod mouse;
+mod shell;
 
-use alloc::vec::Vec;
+use alloc::format;
+use alloc::vec;
 use bootloader_api::config::Mapping;
 use bootloader_api::{entry_point, BootInfo, BootloaderConfig};
 use console::Console;
 use core::panic::PanicInfo;
+use desktop::Desktop;
 use framebuffer::Display;
 use keyboard::Keyboard;
+use shell::Shell;
 use x86_64::instructions::interrupts as cpu;
 
-const PROMPT: &str = "> ";
-const LINE_CAPACITY: usize = 256;
+const TERMINAL_COLUMNS: i32 = 48;
+const TERMINAL_ROWS: i32 = 20;
 
 pub static BOOTLOADER_CONFIG: BootloaderConfig = {
     let mut config = BootloaderConfig::new_default();
@@ -36,9 +43,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         interrupts::halt()
     };
     let info = framebuffer.info();
-    console::install(Console::new(Display::new(framebuffer.buffer_mut(), info)));
-    let (columns, rows) = console::with_console(|c| (c.columns(), c.rows())).unwrap_or((0, 0));
-    println!("rustos console, {columns}x{rows} cells");
+    let display = Display::new(framebuffer.buffer_mut(), info);
 
     gdt::init();
     interrupts::init();
@@ -48,88 +53,47 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         .expect("physical memory is not mapped");
     memory::init_heap(offset, &boot_info.memory_regions);
     keyboard::init_queue();
+    let mouse_ready = mouse::init();
+
+    let console = Console::new(TERMINAL_COLUMNS, TERMINAL_ROWS);
+    let terminal_size = (console.canvas().width(), console.canvas().height());
+    console::install(console);
+    let about = vec![
+        format!("rustos 0.3"),
+        format!("screen {}x{}", display.width(), display.height()),
+        format!("heap {} MiB", memory::HEAP_SIZE >> 20),
+        format!("timer {} Hz", interrupts::TICKS_PER_SECOND),
+        format!("mouse {}", if mouse_ready { "ready" } else { "not found" }),
+    ];
+    desktop::install(Desktop::new(display, terminal_size, about));
     cpu::enable();
-    println!(
-        "heap {} MiB, timer {} Hz",
-        memory::HEAP_SIZE >> 20,
-        interrupts::TICKS_PER_SECOND
-    );
+
     println!("type help for commands");
-
-    shell()
+    event_loop()
 }
 
-fn shell() -> ! {
+fn event_loop() -> ! {
     let mut keyboard = Keyboard::new();
-    let mut line = Vec::with_capacity(LINE_CAPACITY);
-    print!("{PROMPT}");
+    let mut mouse = mouse::Decoder::new();
+    let mut shell = Shell::new();
     loop {
-        let Some(ch) = next_char(&mut keyboard) else {
-            continue;
-        };
-        match ch {
-            '\n' | '\r' => {
-                println!();
-                run_command(core::str::from_utf8(&line).unwrap_or(""));
-                line.clear();
-                print!("{PROMPT}");
-            }
-            '\u{8}' | '\u{7f}' => {
-                if line.pop().is_some() {
-                    print!("\u{8}");
-                }
-            }
-            ' '..='~' if line.len() < LINE_CAPACITY => {
-                line.push(ch as u8);
-                print!("{ch}");
-            }
-            _ => {}
-        }
-    }
-}
-
-fn next_char(keyboard: &mut Keyboard) -> Option<char> {
-    cpu::disable();
-    if !keyboard::has_input() {
         cpu::enable_and_hlt();
-    } else {
-        cpu::enable();
-    }
-    keyboard.next_char()
-}
-
-fn run_command(command: &str) {
-    let (name, argument) = command.split_once(' ').unwrap_or((command, ""));
-    match name {
-        "" => {}
-        "help" => println!("help  clear  echo <text>  info  uptime  mem  int3  fault"),
-        "clear" => {
-            console::with_console(|c| c.clear());
+        while let Some(ch) = keyboard.next_char() {
+            if desktop::terminal_focused() {
+                shell.handle_char(ch);
+            }
         }
-        "echo" => println!("{argument}"),
-        "info" => {
-            let (columns, rows) =
-                console::with_console(|c| (c.columns(), c.rows())).unwrap_or((0, 0));
-            println!("console {columns}x{rows} cells");
+        while let Some(event) = mouse.next_event() {
+            desktop::mouse_event(&event);
         }
-        "uptime" => {
-            let ticks = interrupts::ticks();
-            let per_second = interrupts::TICKS_PER_SECOND;
-            println!("{}.{:02} s", ticks / per_second, ticks % per_second);
-        }
-        "mem" => println!(
-            "heap used {} of {} KiB",
-            memory::heap_used() >> 10,
-            memory::HEAP_SIZE >> 10
-        ),
-        "int3" => x86_64::instructions::interrupts::int3(),
-        "fault" => unsafe { (0xdead_0000 as *mut u8).write_volatile(0) },
-        _ => println!("unknown command: {name}"),
+        desktop::tick(interrupts::ticks());
+        desktop::redraw();
     }
 }
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     println!("panic: {info}");
+    desktop::emergency_redraw();
     interrupts::halt()
 }
