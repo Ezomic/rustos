@@ -51,6 +51,76 @@ impl Rect {
     }
 }
 
+pub struct Sprite {
+    width: i32,
+    height: i32,
+    pixels: Vec<u32>,
+}
+
+impl Sprite {
+    pub fn from_art(art: &[&str], palette: &[(char, u32)]) -> Self {
+        let width = art.iter().map(|row| row.len()).max().unwrap_or(0) as i32;
+        let mut pixels = vec![0; width as usize * art.len()];
+        for (y, row) in art.iter().enumerate() {
+            for (x, symbol) in row.chars().enumerate() {
+                if let Some((_, color)) = palette.iter().find(|(key, _)| *key == symbol) {
+                    pixels[y * width as usize + x] = 0xff00_0000 | color;
+                }
+            }
+        }
+        Self {
+            width,
+            height: art.len() as i32,
+            pixels,
+        }
+    }
+
+    pub fn bevel_box(width: i32, height: i32, color: u32) -> Self {
+        let shade = |amount: i32| {
+            let channel =
+                |shift: u32| (((color >> shift) & 0xff) as i32 + amount).clamp(0, 255) as u32;
+            0xff00_0000 | (channel(16) << 16) | (channel(8) << 8) | channel(0)
+        };
+        let (light, dark) = (shade(60), shade(-60));
+        let mut pixels = vec![shade(0); (width * height) as usize];
+        for x in 0..width {
+            pixels[x as usize] = light;
+            pixels[((height - 1) * width + x) as usize] = dark;
+        }
+        for y in 0..height {
+            pixels[(y * width) as usize] = light;
+            pixels[(y * width + width - 1) as usize] = dark;
+        }
+        Self {
+            width,
+            height,
+            pixels,
+        }
+    }
+
+    pub fn disc(diameter: i32, color: u32) -> Self {
+        let mut pixels = vec![0; (diameter * diameter) as usize];
+        for y in 0..diameter {
+            for x in 0..diameter {
+                let dx = 2 * x + 1 - diameter;
+                let dy = 2 * y + 1 - diameter;
+                if dx * dx + dy * dy <= diameter * diameter {
+                    pixels[(y * diameter + x) as usize] = 0xff00_0000 | color;
+                }
+            }
+        }
+        Self {
+            width: diameter,
+            height: diameter,
+            pixels,
+        }
+    }
+
+    pub fn width(&self) -> i32 {
+        self.width
+    }
+}
+
 pub struct Canvas {
     width: i32,
     height: i32,
@@ -118,6 +188,25 @@ impl Canvas {
         }
     }
 
+    pub fn draw_sprite(&mut self, sprite: &Sprite, x: i32, y: i32) {
+        let target = Rect::new(x, y, sprite.width, sprite.height);
+        let Some(area) = target.intersect(&self.clip) else {
+            return;
+        };
+        for row in area.y..area.bottom() {
+            for column in area.x..area.right() {
+                let source = sprite.pixels[((row - y) * sprite.width + (column - x)) as usize];
+                let alpha = source >> 24;
+                let index = (row * self.width + column) as usize;
+                self.pixels[index] = match alpha {
+                    0 => continue,
+                    255 => source & 0x00ff_ffff,
+                    _ => blend(source, self.pixels[index], alpha),
+                };
+            }
+        }
+    }
+
     pub fn draw_glyph(&mut self, x: i32, y: i32, ch: char, color: u32, scale: i32) {
         let index = if ch.is_ascii() {
             ch as usize
@@ -153,4 +242,13 @@ impl Canvas {
             background,
         );
     }
+}
+
+fn blend(source: u32, backdrop: u32, alpha: u32) -> u32 {
+    let channel = |shift: u32| {
+        let top = (source >> shift) & 0xff;
+        let bottom = (backdrop >> shift) & 0xff;
+        (top * alpha + bottom * (255 - alpha)) / 255
+    };
+    (channel(16) << 16) | (channel(8) << 8) | channel(0)
 }

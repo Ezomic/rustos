@@ -1,5 +1,7 @@
 use crossbeam_queue::ArrayQueue;
-use pc_keyboard::{layouts::Us104Key, DecodedKey, HandleControl, PS2Keyboard, ScancodeSet1};
+use pc_keyboard::{
+    layouts::Us104Key, DecodedKey, HandleControl, KeyCode, KeyState, PS2Keyboard, ScancodeSet1,
+};
 use spin::Once;
 
 const QUEUE_CAPACITY: usize = 128;
@@ -16,6 +18,18 @@ pub fn push_scancode(scancode: u8) {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Key {
+    Char(char),
+    Left,
+    Right,
+}
+
+pub struct KeyInput {
+    pub key: Key,
+    pub pressed: bool,
+}
+
 pub struct Keyboard {
     decoder: PS2Keyboard<Us104Key, ScancodeSet1>,
 }
@@ -27,14 +41,28 @@ impl Keyboard {
         }
     }
 
-    pub fn next_char(&mut self) -> Option<char> {
+    pub fn next_input(&mut self) -> Option<KeyInput> {
         let queue = SCANCODES.get()?;
         while let Some(byte) = queue.pop() {
             let Ok(Some(event)) = self.decoder.add_byte(byte) else {
                 continue;
             };
+            let arrow = match event.code {
+                KeyCode::ArrowLeft => Some(Key::Left),
+                KeyCode::ArrowRight => Some(Key::Right),
+                _ => None,
+            };
+            if let Some(key) = arrow {
+                return Some(KeyInput {
+                    key,
+                    pressed: event.state != KeyState::Up,
+                });
+            }
             if let Some(DecodedKey::Unicode(ch)) = self.decoder.process_keyevent(event) {
-                return Some(ch);
+                return Some(KeyInput {
+                    key: Key::Char(ch),
+                    pressed: true,
+                });
             }
         }
         None

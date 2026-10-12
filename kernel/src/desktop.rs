@@ -1,5 +1,6 @@
 use crate::console;
 use crate::framebuffer::Display;
+use crate::game;
 use crate::gfx::{rgb, Canvas, Rect};
 use crate::interrupts;
 use crate::mouse::MouseEvent;
@@ -49,7 +50,15 @@ const CURSOR_SIZE: (i32, i32) = (11, 17);
 
 enum Content {
     Terminal,
+    Game,
     Text(Vec<String>),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Focus {
+    Terminal,
+    Game,
+    Other,
 }
 
 struct Window {
@@ -86,27 +95,45 @@ pub struct Desktop {
 }
 
 impl Desktop {
-    pub fn new(display: Display, terminal_size: (i32, i32), about: Vec<String>) -> Self {
+    pub fn new(
+        display: Display,
+        terminal_size: (i32, i32),
+        game_size: (i32, i32),
+        about: Vec<String>,
+    ) -> Self {
         let canvas = Canvas::new(display.width(), display.height());
         let about_width = 280;
         let about_height = TITLE_HEIGHT + 1 + 16 + about.len() as i32 * 16;
+        let margin = 20;
         let terminal = Window {
             id: 0,
             title: "Terminal",
             rect: Rect::new(
-                40,
-                40,
+                margin,
+                margin,
                 terminal_size.0 + 2,
                 terminal_size.1 + TITLE_HEIGHT + 1,
             ),
             content: Content::Terminal,
         };
+        let column = terminal.rect.right() + margin;
+        let breakout = Window {
+            id: 2,
+            title: "Breakout",
+            rect: Rect::new(
+                column,
+                margin,
+                game_size.0 + 2,
+                game_size.1 + TITLE_HEIGHT + 1,
+            ),
+            content: Content::Game,
+        };
         let about = Window {
             id: 1,
             title: "About",
             rect: Rect::new(
-                (display.width() - about_width - 40).max(0),
-                80,
+                column,
+                breakout.rect.bottom() + margin,
                 about_width,
                 about_height,
             ),
@@ -116,7 +143,7 @@ impl Desktop {
             cursor: (display.width() / 2, display.height() / 2),
             display,
             canvas,
-            windows: alloc::vec![about, terminal],
+            windows: alloc::vec![about, breakout, terminal],
             left_down: false,
             grab: None,
             damage: None,
@@ -243,21 +270,31 @@ impl Desktop {
         }
     }
 
-    pub fn terminal_focused(&self) -> bool {
-        self.windows
-            .last()
-            .is_some_and(|w| matches!(w.content, Content::Terminal))
+    pub fn focus(&self) -> Focus {
+        match self.windows.last().map(|w| &w.content) {
+            Some(Content::Terminal) => Focus::Terminal,
+            Some(Content::Game) => Focus::Game,
+            _ => Focus::Other,
+        }
     }
 
-    fn damage_terminal(&mut self) {
+    fn damage_content(&mut self, matches: fn(&Content) -> bool) {
         let area = self
             .windows
             .iter()
-            .find(|w| matches!(w.content, Content::Terminal))
+            .find(|w| matches(&w.content))
             .map(|w| w.content_area());
         if let Some(area) = area {
             self.damage_rect(area);
         }
+    }
+
+    fn damage_terminal(&mut self) {
+        self.damage_content(|c| matches!(c, Content::Terminal));
+    }
+
+    fn damage_game(&mut self) {
+        self.damage_content(|c| matches!(c, Content::Game));
     }
 
     pub fn redraw(&mut self) {
@@ -339,6 +376,9 @@ fn draw_window(canvas: &mut Canvas, window: &Window, focused: bool) {
         Content::Terminal => {
             console::peek(|c| canvas.blit(c.canvas(), area.x, area.y));
         }
+        Content::Game => {
+            game::peek(|g| canvas.blit(g.canvas(), area.x, area.y));
+        }
         Content::Text(lines) => {
             for (index, line) in lines.iter().enumerate() {
                 canvas.draw_text(area.x + 12, area.y + 12 + index as i32 * 16, line, TEXT, 1);
@@ -361,8 +401,8 @@ pub fn screen_size() -> (i32, i32) {
     with(|d| (d.display.width(), d.display.height())).unwrap_or((0, 0))
 }
 
-pub fn terminal_focused() -> bool {
-    with(|d| d.terminal_focused()).unwrap_or(false)
+pub fn focus() -> Focus {
+    with(|d| d.focus()).unwrap_or(Focus::Other)
 }
 
 pub fn mouse_event(event: &MouseEvent) {
@@ -375,9 +415,13 @@ pub fn tick(ticks: u64) {
 
 pub fn redraw() {
     let terminal_changed = console::take_dirty();
+    let game_changed = game::take_dirty();
     with(|d| {
         if terminal_changed {
             d.damage_terminal();
+        }
+        if game_changed {
+            d.damage_game();
         }
         d.redraw();
     });
