@@ -7,6 +7,7 @@ extern crate alloc;
 mod console;
 mod desktop;
 mod framebuffer;
+mod game;
 mod gdt;
 mod gfx;
 mod interrupts;
@@ -21,13 +22,14 @@ use bootloader_api::config::Mapping;
 use bootloader_api::{entry_point, BootInfo, BootloaderConfig};
 use console::Console;
 use core::panic::PanicInfo;
-use desktop::Desktop;
+use desktop::{Desktop, Focus};
 use framebuffer::Display;
-use keyboard::Keyboard;
+use game::Breakout;
+use keyboard::{Key, Keyboard};
 use shell::Shell;
 use x86_64::instructions::interrupts as cpu;
 
-const TERMINAL_COLUMNS: i32 = 48;
+const TERMINAL_COLUMNS: i32 = 40;
 const TERMINAL_ROWS: i32 = 20;
 
 pub static BOOTLOADER_CONFIG: BootloaderConfig = {
@@ -59,13 +61,15 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     let terminal_size = (console.canvas().width(), console.canvas().height());
     console::install(console);
     let about = vec![
-        format!("rustos 0.3"),
+        format!("rustos 0.4"),
         format!("screen {}x{}", display.width(), display.height()),
         format!("heap {} MiB", memory::HEAP_SIZE >> 20),
         format!("timer {} Hz", interrupts::TICKS_PER_SECOND),
         format!("mouse {}", if mouse_ready { "ready" } else { "not found" }),
     ];
-    desktop::install(Desktop::new(display, terminal_size, about));
+    game::install(Breakout::new(interrupts::ticks()));
+    let game_size = (game::WIDTH, game::HEIGHT);
+    desktop::install(Desktop::new(display, terminal_size, game_size, about));
     cpu::enable();
 
     println!("type help for commands");
@@ -78,15 +82,23 @@ fn event_loop() -> ! {
     let mut shell = Shell::new();
     loop {
         cpu::enable_and_hlt();
-        while let Some(ch) = keyboard.next_char() {
-            if desktop::terminal_focused() {
-                shell.handle_char(ch);
+        while let Some(input) = keyboard.next_input() {
+            match (desktop::focus(), input.key) {
+                (Focus::Terminal, Key::Char(ch)) => shell.handle_char(ch),
+                (Focus::Game, key) => game::key(key, input.pressed),
+                _ => {}
             }
         }
         while let Some(event) = mouse.next_event() {
             desktop::mouse_event(&event);
         }
-        desktop::tick(interrupts::ticks());
+        let now = interrupts::ticks();
+        if desktop::focus() == Focus::Game {
+            game::update(now);
+        } else {
+            game::pause(now);
+        }
+        desktop::tick(now);
         desktop::redraw();
     }
 }
